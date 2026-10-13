@@ -1,0 +1,226 @@
+// Hardware test: Tft + wifi
+
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
+#include <WiFi.h>
+
+// =========================
+// Wi-Fi
+// =========================
+
+const char* WIFI_SSID = "DIT_WIFI_NAVN";
+const char* WIFI_PASSWORD = "DIT_WIFI_PASSWORD";
+
+// =========================
+// TFT pins
+// =========================
+
+#define TFT_MOSI 11
+#define TFT_MISO 13
+#define TFT_SCLK 12
+
+#define TFT_CS   10
+#define TFT_DC    9
+#define TFT_RST   8
+
+Adafruit_ILI9341 tft(&SPI, TFT_DC, TFT_CS, TFT_RST);
+
+// =========================
+// Functions
+// =========================
+
+void setupDisplay();
+bool connectWiFi();
+void showWiFiStatus();
+
+
+// =========================
+// Setup
+// =========================
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+
+    Serial.println();
+    Serial.println("===========================");
+    Serial.println("   Auction Device 2.0");
+    Serial.println("===========================");
+
+    setupDisplay();
+
+    bool connected = connectWiFi();
+
+    if (connected)
+    {
+        showWiFiStatus();
+    }
+    else
+    {
+        tft.fillScreen(ILI9341_BLACK);
+
+        tft.setTextColor(ILI9341_RED);
+        tft.setTextSize(2);
+
+        tft.setCursor(20, 30);
+        tft.println("WiFi FAILED");
+
+        Serial.println("WiFi connection failed.");
+    }
+}
+
+
+// =========================
+// Loop
+// =========================
+
+void loop()
+{
+    // Nothing needed yet
+}
+
+
+// =========================
+// Display setup
+// =========================
+
+void setupDisplay()
+{
+    Serial.println("Starting TFT...");
+
+    SPI.begin(
+        TFT_SCLK,
+        TFT_MISO,
+        TFT_MOSI,
+        TFT_CS
+    );
+
+    tft.begin();
+    tft.setRotation(1);
+
+    tft.fillScreen(ILI9341_BLACK);
+
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setTextSize(2);
+
+    tft.setCursor(20, 30);
+    tft.println("Auction Device 2.0");
+
+    tft.setTextColor(ILI9341_CYAN);
+
+    tft.setCursor(20, 70);
+    tft.println("Starting...");
+
+    Serial.println("TFT OK");
+}
+
+
+// =========================
+// Wi-Fi
+// =========================
+
+bool connectWiFi()
+{
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(WIFI_SSID);
+
+    tft.fillScreen(ILI9341_BLACK);
+
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setTextSize(2);
+
+    tft.setCursor(20, 30);
+    tft.println("Connecting to WiFi");
+
+    tft.setCursor(20, 70);
+    tft.println(WIFI_SSID);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    unsigned long startTime = millis();
+
+    int dotX = 20;
+
+    while (
+        WiFi.status() != WL_CONNECTED &&
+        millis() - startTime < 15000
+    )
+    {
+        delay(500);
+
+        Serial.print(".");
+
+        tft.setTextColor(ILI9341_YELLOW);
+        tft.setTextSize(2);
+
+        tft.setCursor(dotX, 110);
+        tft.print(".");
+
+        dotX += 12;
+    }
+
+    Serial.println();
+
+    return WiFi.status() == WL_CONNECTED;
+}
+
+
+// =========================
+// Show connection info
+// =========================
+
+void showWiFiStatus()
+{
+    IPAddress ip = WiFi.localIP();
+    int rssi = WiFi.RSSI();
+
+    Serial.println("WiFi connected!");
+
+    Serial.print("IP address: ");
+    Serial.println(ip);
+
+    Serial.print("RSSI: ");
+    Serial.print(rssi);
+    Serial.println(" dBm");
+
+    tft.fillScreen(ILI9341_BLACK);
+
+    tft.setTextColor(ILI9341_GREEN);
+    tft.setTextSize(3);
+
+    tft.setCursor(20, 20);
+    tft.println("CONNECTED");
+
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setTextSize(2);
+
+    tft.setCursor(20, 80);
+    tft.print("IP: ");
+    tft.println(ip);
+
+    tft.setCursor(20, 120);
+    tft.print("RSSI: ");
+    tft.print(rssi);
+    tft.println(" dBm");
+
+    tft.setCursor(20, 170);
+
+    if (rssi >= -60)
+    {
+        tft.setTextColor(ILI9341_GREEN);
+        tft.println("Signal: GOOD");
+    }
+    else if (rssi >= -70)
+    {
+        tft.setTextColor(ILI9341_YELLOW);
+        tft.println("Signal: OK");
+    }
+    else
+    {
+        tft.setTextColor(ILI9341_RED);
+        tft.println("Signal: WEAK");
+    }
+}
