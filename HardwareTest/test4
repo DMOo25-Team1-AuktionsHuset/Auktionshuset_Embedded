@@ -1,0 +1,94 @@
+//Hardware test af rotary encoder
+
+
+
+#define ENCODER_A   4
+#define ENCODER_B   5
+#define ENCODER_SW  6
+
+int lastState;
+int transitionCounter = 0;
+
+bool lastButtonState = HIGH;
+
+void setup()
+{
+    Serial.begin(115200);
+
+    pinMode(ENCODER_A, INPUT_PULLUP);
+    pinMode(ENCODER_B, INPUT_PULLUP);
+    pinMode(ENCODER_SW, INPUT_PULLUP);
+
+    lastState =
+        (digitalRead(ENCODER_A) << 1) |
+        digitalRead(ENCODER_B);
+
+    Serial.println();
+    Serial.println("=== Rotary Encoder Test ===");
+    Serial.println("Rotate encoder or press button");
+}
+
+void loop()
+{
+    readEncoder();
+    readButton();
+}
+
+
+// =========================
+// Rotary encoder
+// =========================
+
+void readEncoder()
+{
+    static const int8_t transitionTable[16] =
+    {
+         0, -1,  1,  0,
+         1,  0,  0, -1,
+        -1,  0,  0,  1,
+         0,  1, -1,  0
+    };
+
+    int currentState =
+        (digitalRead(ENCODER_A) << 1) |
+        digitalRead(ENCODER_B);
+
+    int transition =
+        (lastState << 2) | currentState;
+
+    transitionCounter += transitionTable[transition];
+
+    lastState = currentState;
+
+    // Typical EC11 gives four valid transitions per detent
+    if (transitionCounter >= 4)
+    {
+        Serial.println("LEFT");
+        transitionCounter = 0;
+    }
+    else if (transitionCounter <= -4)
+    {
+        Serial.println("RIGHT");
+        transitionCounter = 0;
+    }
+}
+
+
+// =========================
+// Encoder push button
+// =========================
+
+void readButton()
+{
+    bool currentButtonState = digitalRead(ENCODER_SW);
+
+    if (lastButtonState == HIGH &&
+        currentButtonState == LOW)
+    {
+        Serial.println("BUTTON");
+    }
+
+    lastButtonState = currentButtonState;
+
+    delay(1);
+}
