@@ -1,0 +1,487 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+
+// ======================================================
+// Configuration
+// ======================================================
+
+const char* WIFI_SSID = "INDSÆT_WIFI_SSID";
+const char* WIFI_PASSWORD = "INDSÆT_WIFI_PASSWORD";
+
+// Computerens lokale IP-adresse.
+// Brug ikke localhost eller ESP32'ens egen IP-adresse.
+const char* BACKEND_HOST = "192.168.1.199";
+const uint16_t BACKEND_PORT = 5133;
+const char* BACKEND_PATH = "/ws/device/test";
+
+// ======================================================
+// TFT
+// ======================================================
+
+#define TFT_MOSI 11
+#define TFT_MISO 13
+#define TFT_SCLK 12
+
+#define TFT_CS   10
+#define TFT_DC    9
+#define TFT_RST   8
+
+Adafruit_ILI9341 tft(&SPI, TFT_DC, TFT_CS, TFT_RST);
+
+// ======================================================
+// Rotary encoder
+// ======================================================
+
+#define ENCODER_A   4
+#define ENCODER_B   5
+#define ENCODER_SW  6
+
+int lastEncoderState;
+int transitionCounter = 0;
+
+bool lastButtonReading = HIGH;
+bool stableButtonState = HIGH;
+
+unsigned long lastButtonChangeAt = 0;
+const unsigned long BUTTON_DEBOUNCE_MS = 40;
+
+// ======================================================
+// Local auction test values
+// ======================================================
+
+// Disse værdier kommer endnu ikke fra backend.
+int currentBid = 1000;
+
+const int BID_STEP = 100;
+const int MIN_BID = 100;
+
+int customerBid = currentBid + BID_STEP;
+
+// ======================================================
+// WebSocket
+// ======================================================
+
+WebSocketsClient webSocket;
+
+bool backendConnected = false;
+unsigned long lastStatusUpdateAt = 0;
+
+// ======================================================
+// Function declarations
+// ======================================================
+
+void setupDisplay();
+bool connectWiFi();
+
+void setupWebSocket();
+void onWebSocketEvent(
+    WStype_t type,
+    uint8_t* payload,
+    size_t length
+);
+
+void drawAuctionScreen();
+void updateConnectionStatus();
+void updateCustomerBidDisplay();
+
+void readEncoder();
+void readEncoderButton();
+
+// ======================================================
+// Setup
+// ======================================================
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+
+    Serial.println();
+    Serial.println("=== Auction Device: HardwareTest5 ===");
+
+    pinMode(ENCODER_A, INPUT_PULLUP);
+    pinMode(ENCODER_B, INPUT_PULLUP);
+    pinMode(ENCODER_SW, INPUT_PULLUP);
+
+    lastEncoderState =
+        (digitalRead(ENCODER_A) << 1) |
+        digitalRead(ENCODER_B);
+
+    lastButtonReading = digitalRead(ENCODER_SW);
+    stableButtonState = lastButtonReading;
+
+    setupDisplay();
+
+    if (connectWiFi())
+    {
+        Serial.println("WiFi connected!");
+
+        Serial.print("ESP32 IP: ");
+        Serial.println(WiFi.localIP());
+
+        Serial.print("RSSI: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+    }
+    else
+    {
+        Serial.println("WiFi connection failed.");
+    }
+
+    drawAuctionScreen();
+    setupWebSocket();
+}
+
+// ======================================================
+// Main loop
+// ======================================================
+
+void loop()
+{
+    webSocket.loop();
+
+    readEncoder();
+    readEncoderButton();
+
+    if (millis() - lastStatusUpdateAt >= 1000)
+    {
+        lastStatusUpdateAt = millis();
+        updateConnectionStatus();
+    }
+
+    delay(1);
+}
+
+// ======================================================
+// Display setup
+// ======================================================
+
+void setupDisplay()
+{
+    SPI.begin(
+        TFT_SCLK,
+        TFT_MISO,
+        TFT_MOSI,
+        TFT_CS
+    );
+
+    tft.begin();
+    tft.setRotation(1);
+    tft.fillScreen(ILI9341_BLACK);
+
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setTextSize(2);
+
+    tft.setCursor(20, 30);
+    tft.println("Auction Device 2.0");
+
+    tft.setTextColor(ILI9341_CYAN);
+    tft.setCursor(20, 70);
+    tft.println("Connecting WiFi...");
+}
+
+// ======================================================
+// Wi-Fi
+// ======================================================
+
+bool connectWiFi()
+{
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    Serial.print("Connecting to WiFi");
+
+    unsigned long startedAt = millis();
+
+    while (
+        WiFi.status() != WL_CONNECTED &&
+        millis() - startedAt < 15000
+    )
+    {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.println();
+
+    return WiFi.status() == WL_CONNECTED;
+}
+
+// ======================================================
+// WebSocket setup
+// ======================================================
+
+void setupWebSocket()
+{
+    webSocket.onEvent(onWebSocketEvent);
+
+    webSocket.begin(
+        BACKEND_HOST,
+        BACKEND_PORT,
+        BACKEND_PATH
+    );
+
+    // Biblioteket forsøger igen efter afbrydelse.
+    webSocket.setReconnectInterval(5000);
+
+    Serial.print("Connecting to: ws://");
+    Serial.print(BACKEND_HOST);
+    Serial.print(":");
+    Serial.print(BACKEND_PORT);
+    Serial.println(BACKEND_PATH);
+}
+
+// ======================================================
+// WebSocket events
+// ======================================================
+
+void onWebSocketEvent(
+    WStype_t type,
+    uint8_t* payload,
+    size_t length
+)
+{
+    switch (type)
+    {
+        case WStype_CONNECTED:
+        {
+            backendConnected = true;
+
+            Serial.println("WebSocket connected");
+            updateConnectionStatus();
+
+            const char* hello =
+                "{\"type\":\"hello\","
+                "\"deviceName\":\"ESP32-TEST-001\"}";
+
+            if (webSocket.sendTXT(hello))
+            {
+                Serial.print("Sent: ");
+                Serial.println(hello);
+            }
+            else
+            {
+                Serial.println("Could not send hello");
+            }
+
+            break;
+        }
+
+        case WStype_TEXT:
+        {
+            Serial.print("Backend: ");
+            Serial.write(payload, length);
+            Serial.println();
+
+            break;
+        }
+
+        case WStype_DISCONNECTED:
+        {
+            backendConnected = false;
+
+            Serial.println("WebSocket disconnected");
+            updateConnectionStatus();
+
+            break;
+        }
+
+        case WStype_ERROR:
+        {
+            Serial.println("WebSocket error");
+
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
+// ======================================================
+// Main screen
+// ======================================================
+
+void drawAuctionScreen()
+{
+    tft.fillScreen(ILI9341_BLACK);
+
+    updateConnectionStatus();
+
+    tft.drawFastHLine(
+        0,
+        25,
+        320,
+        ILI9341_DARKGREY
+    );
+
+    tft.setTextSize(2);
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setCursor(20, 45);
+    tft.print("Current bid:");
+
+    tft.setTextColor(ILI9341_YELLOW);
+    tft.setCursor(190, 45);
+    tft.print(currentBid);
+    tft.print(" kr");
+
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setCursor(20, 100);
+    tft.print("Your bid");
+
+    updateCustomerBidDisplay();
+
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_CYAN);
+    tft.setCursor(20, 210);
+    tft.print("Rotate to adjust - local test");
+
+    tft.setTextColor(ILI9341_YELLOW);
+    tft.setCursor(20, 225);
+    tft.print("Backend reply: see Serial Monitor");
+}
+
+// ======================================================
+// Connection status
+// ======================================================
+
+void updateConnectionStatus()
+{
+    bool wifiConnected = WiFi.status() == WL_CONNECTED;
+
+    tft.fillRect(0, 0, 320, 24, ILI9341_BLACK);
+    tft.setTextSize(1);
+
+    tft.setCursor(10, 8);
+    tft.setTextColor(
+        wifiConnected ? ILI9341_GREEN : ILI9341_RED
+    );
+    tft.print(wifiConnected ? "WiFi: OK" : "WiFi: OFF");
+
+    tft.setCursor(100, 8);
+
+    bool socketConnected = wifiConnected && backendConnected;
+
+    tft.setTextColor(
+        socketConnected ? ILI9341_GREEN : ILI9341_YELLOW
+    );
+    tft.print(socketConnected ? "WS: OK" : "WS: OFF");
+
+    if (wifiConnected)
+    {
+        tft.setTextColor(ILI9341_WHITE);
+        tft.setCursor(230, 8);
+        tft.print(WiFi.RSSI());
+        tft.print(" dBm");
+    }
+}
+
+// ======================================================
+// Customer bid display
+// ======================================================
+
+void updateCustomerBidDisplay()
+{
+    tft.fillRect(
+        20,
+        130,
+        280,
+        60,
+        ILI9341_BLACK
+    );
+
+    tft.setTextSize(4);
+    tft.setTextColor(ILI9341_GREEN);
+    tft.setCursor(60, 140);
+
+    tft.print(customerBid);
+    tft.print(" kr");
+}
+
+// ======================================================
+// Rotary encoder
+// ======================================================
+
+void readEncoder()
+{
+    static const int8_t transitionTable[16] =
+    {
+         0, -1,  1,  0,
+         1,  0,  0, -1,
+        -1,  0,  0,  1,
+         0,  1, -1,  0
+    };
+
+    int currentEncoderState =
+        (digitalRead(ENCODER_A) << 1) |
+        digitalRead(ENCODER_B);
+
+    int transition =
+        (lastEncoderState << 2) |
+        currentEncoderState;
+
+    transitionCounter += transitionTable[transition];
+    lastEncoderState = currentEncoderState;
+
+    // Samme retning som i HardwareTest4.
+    if (transitionCounter >= 4)
+    {
+        customerBid -= BID_STEP;
+
+        if (customerBid < MIN_BID)
+        {
+            customerBid = MIN_BID;
+        }
+
+        transitionCounter = 0;
+
+        Serial.print("Local bid: ");
+        Serial.println(customerBid);
+
+        updateCustomerBidDisplay();
+    }
+    else if (transitionCounter <= -4)
+    {
+        customerBid += BID_STEP;
+        transitionCounter = 0;
+
+        Serial.print("Local bid: ");
+        Serial.println(customerBid);
+
+        updateCustomerBidDisplay();
+    }
+}
+
+// ======================================================
+// Encoder button
+// ======================================================
+
+void readEncoderButton()
+{
+    bool reading = digitalRead(ENCODER_SW);
+
+    if (reading != lastButtonReading)
+    {
+        lastButtonChangeAt = millis();
+    }
+
+    if (
+        millis() - lastButtonChangeAt >= BUTTON_DEBOUNCE_MS &&
+        reading != stableButtonState
+    )
+    {
+        stableButtonState = reading;
+
+        if (stableButtonState == LOW)
+        {
+            Serial.println(
+                "Encoder button pressed - no bid sent"
+            );
+        }
+    }
+
+    lastButtonReading = reading;
+}
