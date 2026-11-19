@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <stdint.h>
+#include "BidJournal.h"
 
 // ESP32; requires ArduinoJson and arduinoWebSockets. Call loop() frequently.
 // Configuration strings must remain valid for the lifetime of this object.
@@ -41,18 +42,23 @@ public:
     Status status() const { return status_; }
     const State& state() const { return state_; }
     const Receipt& receipt() const { return receipt_; }
+    const char* faultCode() const { return faultCode_; }
+    uint32_t faultFreeEntries() const { return journal_.lastFreeEntries(); }
     bool hasPending() const { return pending_.length() != 0; }
+    uint64_t pendingAmountOre() const { return journal_.entry().amountOre; }
     // Generates a request UUID and retains its complete payload until resolved.
-    // Explicitly reconcile any pre-reset bid before enabling new bids.
-    void enableBiddingAfterReconciliation() { biddingEnabled_ = true; }
+    // Boot loads the durable journal; an unresolved request blocks every new bid.
     bool placeBid(uint64_t amountOre);
     // Resends identical bytes only after authentication and synchronization in the same session.
     bool retryPending();
+    bool checkPendingResolution() { return authenticated_ && requestResolution(); }
     // Call only after external reconciliation, or after recording a final receipt.
-    void clearPending();
+    bool clearPending();
 
 private:
     Config config_{};
+    BidJournal journal_;
+    BidJournal::Entry stagedBid_{};
     WebSocketsClient socket_;
     Status status_ = Status::Offline;
     State state_{};
@@ -63,10 +69,14 @@ private:
     bool biddingEnabled_ = false, uncertain_ = false, revisionKnown_ = false;
     uint64_t minimumRevision_ = 0;
     bool started_ = false, socketStarted_ = false, authenticated_ = false, haveState_ = false, fragmenting_ = false;
+    bool clockSyncRequested_ = false;
+    const char* faultCode_ = "";
+    const char* receivePhase_ = "RX";
     unsigned long lastWifiAttempt_ = 0, lastReceived_ = 0, lastPing_ = 0, fragmentStarted_ = 0;
     void event(WStype_t type, uint8_t* payload, size_t length);
     void message(const uint8_t* payload, size_t length);
     void fail();
     void offline();
     bool sendHeartbeat(const char* type);
+    bool requestResolution();
 };

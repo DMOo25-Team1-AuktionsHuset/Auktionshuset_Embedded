@@ -378,6 +378,7 @@ ASALocalRun/
 
 # MSBuild Binary and Structured Log
 *.binlog
+HardwareTest/UsbStation/*.bin
 MSBuild_Logs/
 
 # AWS SAM Build and Temporary Artifacts folder
